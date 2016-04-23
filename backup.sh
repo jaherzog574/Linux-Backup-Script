@@ -13,7 +13,7 @@ dest="Destination location"
 templog="log name"		
 
 # Enter the name you wish the archive to be called (the default option has the time/date in the name).
-an=MyBakp-$(date +%m-%d-%Y)_$(date +%H-%M-%S).tgz	
+an=MyBakp-$(date +%m-%d-%Y)_$(date +%H-%M-%S).tar.gz	
 
 # Enter the email address you wish to send this to (note sendmail must be configured and running for this to work).
 email="youremailaddress"
