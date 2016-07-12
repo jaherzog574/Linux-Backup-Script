@@ -1,10 +1,15 @@
 # Basic Linux Backup Script
-BASH script that runs on Linux and does backups of the specified directory and sends the user an email when done with a log of 
-what it's done when finished.
+A simple BASH script that that does backups of a specified directory, purges the older backups, and sends the user an email when complete.
 
-Make sure that when you download the script that you change the source, destination, log file name, and email address to your
-needs (these are all found at the top of the file).
+It is important that you specify the following aguments (in order) when you call this script:
+  - Backup name
+  - Soruce Location
+  - Destination Location
+  - (optional) Backup limit (number of backups you wish to keep)
+  - (optional) Exclusions (files/folders you wish to not include in the backup)
 
-If you wish to automate this script, then tell Chon to run it and give it the times that it should run at (look online if you are unfamiliar with Cron).
+This script has been tested on Ubuntu Server 14.04 LTS and partually works on CentOS 6.5 (just change all the "-A"s on the mailx lines to "-a") as there is a slight difference between the current version of Mailx on CentOS and the one on Ubuntu. Though it hasn't been varified, this script is expected to work on other (espessually Debian-based) Linux distrobutions as well (use caution if this applies to you).
 
-Keep in mind that this is one of my first scripts that I've written.
+If you wish to automate this script, then make sure that the script has execute permissions, and is put in a reasonable location (I recommend putting it in the /sbin directory, but other locations work fine aswell). Modify the crontab to your liking making sure to include the nessessary arguments (I recommned setting the script to backup a small directory in a few minutes into the future to varify the script works properally before telling it to backup any real data).
+
+Keep in mind that this is one of my first scripts that I've written. This script is not perfect and is not intended to be used in a production envirnment (Simply becouse it's not as well tested and mature as some of the other backup solutuions out there).
