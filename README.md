@@ -1,15 +1,14 @@
 # Basic Linux Backup Script
-A simple BASH script that that does backups of a specified directory, purges the older backups, and sends the user an email when complete.
+A simple BASH script that that does backups of a specified directory, purges the older backups, and sends the user an email when bckup completes (or fails).
 
-It is important that you specify the following augments (in order) when you call this script:
-  - Backup name
-  - Source Location
-  - Destination Location
-  - (optional) Backup limit (number of backups you wish to keep)
-  - (optional) Exclusions (files/folders you wish to not include in the backup)
+It is recommended that you copy the included "example.cfg" file into a /etc/backups location that you create rather then trying to create your own. It is recommended that you rename the config file (by default it's example.cfg) to something more meaningful like "dailyBackup.cfg". Before editing the config file and changing all of the values that say "SETME".
 
-This script has been tested on Ubuntu Server 14.04 LTS and partially works on CentOS 6.5 (just change all the "-A"s on the mailx lines to "-a") as there is a slight difference between the current version of Mailx on CentOS and the one on Ubuntu. While it hasn't been verified, this script is expected to work on other (especially Debian-based) Linux distributions as well (though it's best to use caution if this situation applies to you).
+It is also recommended that you place the backup.sh file in the /sbin/ directory so that you can just call it like this: `backup.sh <configName>`. However you can place it wherever you want just as long as you keep in mind where it is on the system and you call it with that location in mind. (putting it in /sbin/ just allows you to call it directly). When/if you choose to automate this script you should still reference the absolute location of the backup.sh file just as a good practice.
 
-If you wish to automate this script, then make sure that the script has execute permissions, and is put in a reasonable location (I recommend putting it in the /sbin directory, but other locations work fine as well). Modify the crontab to your liking making sure to include the necessary arguments (I recommend setting the script to backup a small directory in a few minutes into the future to verify the script works properly before telling it to backup any real data).
+If you want to automate this script then open crontab by issuing the command: `sudo crontab -e`, and then call the script along with the backup config location like so: 
+`0 21 * * * /sbin/backup.sh daily >> /dev/null 2>&1`
+This will call the backup script once every night at 9:00PM (note I'm calling the script at the absoulute location of /sbin/backup.sh instead of just backup.sh, as mentioned before it is good practice to use the absolute path when referencing the script file). The seccond part of the command (the part where it says "daily" in the example) is the name of the config file that we will be using. Make sure that this is the correct name otherwise the script will not work. You can choose to use the >> /dev/null 2>&1 or not. I like to use it as it reduces the verbosity that the script outputs (even thought the script isn't increadably verbose without nulling it).
 
-Keep in mind that this is one of the first scripts that I've written. For this reason, the script is far from perfect and is therefore not intended to be used in a production environment (I am not responsible for any damage that this script may cause, and so it is important that you test this script heavily before having it backup data that you care about).
+This script has been tested on Ubuntu Server 14.04 LTS and CentOS 6.5. This script will likely work on other distrobutions (particularly Debian-based ones) provided that the system has all of the needed dependencies. Although I have no way of varifiying if this works (use caution and test the script and varify that you can access the file(s) it creates if you are unsure).
+
+I recommend setting the script to backup a small directory a few times to make sure that it works properally before telling it to backup any real data). Keep in mind that this is one of the first BASH scripts that I've written. For this reason, the script is far from perfect and is therefore not intended to be used in a production environment (I am not responsible for any damage that this script may cause, and so it is important that you test this script heavily before having it backup data that you care about).
