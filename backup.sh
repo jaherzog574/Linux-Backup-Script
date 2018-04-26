@@ -1,218 +1,357 @@
-#!/bin/bash
-name=$1
-source=$2
-dest=$3
-bkupLimt=${4-"5"}			 # Useful if you want to change the number of backups that are kept.
-exclude=${5-"none"}      # Useful if you want to exclude a directory (sets the value to "none" if no value is given), specifying a wildcard DOES NOT WORK 
-arname="$name-$(date +%m-%d-%Y)at$(date +%H-%M-%S).tar.gz"
-tmpLog="/tmp/$name-tmpLog.rtf"
-fulLog="/var/log/$name-fullLog.rtf"
-fleLst="/tmp/$name-fileList.rtf"
-svrIp="127.0.0.1" # leave at "127.0.0.1" if the backup is a local backup, otherwise change it to backup server's IP.
-email="email@example.com"
+#!/usr/bin/env bash
+####################################################
+## Special thanks to pricetx who's backup.sh script is implemented in parts of this backup script and also
+## TheUbuntuGuy who's offline-zfs-backup script is partly used in the WOL part of this script.
+##
+## Pricetx's Backup script:
+## https://github.com/Pricetx/backup
+##
+## TheUbuntuGuy's offline-zfs-backup script:
+## https://github.com/TheUbuntuGuy/offline-zfs-backup
+####################################################
 
-# Pre-backup checks
+#####
+# Remember when running this script it is recommended that you include --config <location of config file>.cfg
+#####
 
-#Clears the terminal and checks if root is running the script
-clear
-if [ $(whoami) != "root" ]
-then
-	echo "Script must be run as root!"	
-	echo "Script was not run as root, backup aborted" | mailx -s "$(hostname -s): $name backup failed" @email
-	exit 1
+
+###### Start of script ######
+
+
+
+### Initial Variables ###
+
+# Ensure that all possible binary paths are checked.
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+
+#Directory the script is in (for later use).
+SCRIPTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+### LOAD IN CONFIG ###
+
+# Default config location
+CONFIG="${SCRIPTDIR}"/backup.cfg
+
+if [ "$1" == "--config" ]; then
+    # Get config from specified file
+    CONFIG="$2"
+elif [ $# != 0 ]; then
+    # Invalid arguments
+    echo "Usage: $0 [--config filename]"
+	logger "the backup script failed (an invalid argument was provided)"
+    exit
 fi
 
-#Delete old temporary log files (in case the last backup stopped suddenly), recreates the tmp log, file list, and full log (if not already existent) and puts 3 spaces in the full log (for better readibility).
-logger "$(date +%m/%d/%Y) at $(date +%H:%M:%S) - starting $name backup..."
-rm "$tmpLog" "$fleLst" >> /dev/null 2>&1
-touch "$tmpLog" "$fleLst" "$fulLog"
-echo "" >> "$fulLog"
-echo "" >> "$fulLog"
-echo "" >> "$fulLog"
+# Load in config and set inital values.
+CONFIG=$( readlink -f "${CONFIG}" )
+source "${CONFIG}"
+STARTTIME=$(date +%s)
+BACKUPDATE=$(date -u +%Y-%m-%d_at_%H-%M)
+DESTINATION="${REMOTEDIR}""$(hostname)"-"${BACKUPDATE}"
+TMPSQLDUMP="${TEMPDIR}""tempMySqlDump.sql"
 
-#Checks if the server it will backup to is up (waits a maximum of 30 seconds between pings).
-ping -c 3 -t 30 $svrIp > /dev/null 2>&1
+### Functions ###
 
-# If the ping fails (server is down)
-if [ $? -ne 0 ]
-then
-	echo "Backup server has not responded to 3 consecutive pings. Server is likely down. Stopping script and notifing administrator." >> "$tmpLog"
-	logger "$(date +%m/%d/%Y) at $(date +%H-%M-%S)- $name Backup aborted, server ($svrIp) failed to respond to ping"
-	( echo "WARNING: $name backup failed becouse the server at address $svrIp appears down or failed to ping from host $(hostname).";  echo "$name backup for $(date +%m-%d-%Y) at $(date +%H:%M:%S) has been aborted"; cat "$tmpLog" ) | mail -s "WARNING: $name backup failed" -A "$tmpLog" $email
-	cat "$tmpLog" >> "$fulLog"
-	rm "$tmpLog"
-	exit 2
-fi
+# Provides the 'log' command to simultaneously log to
+# STDOUT and the log file with a single command
+# NOTE: Use "" rather than \n unless you want to have timestamp.
+log() {
+    echo -e "$(date -u +%Y-%m-%d@%H:%M:%S)" "$1" >> "${LOGFILE}"
+    if [ "$2" != "noecho" ]; then
+        echo -e "$1"
+    fi
+}
 
-echo "Backup server appears accessible, continuing with backup..." >> "$tmpLog"
-
-
-
-#Checks if backup location exists creates one if needed
-if [ ! -d "$dest" ]
-then
-	echo "Specified backup location doesn't exist, creating it" >> "$tmpLog"
-	mkdir "$dest" >> "$tmpLog"
-fi
-
-#Creates "header" for the temp log file
-echo "" >> "$tmpLog"
-echo "" >> "$tmpLog"
-echo "Backup name: $name" >> "$tmpLog"
-echo "Computer name: $(hostname)" >> "$tmpLog"
-echo "Started at: $(date +%H:%M:%S) on $(date +%m/%d/%Y)" >> "$tmpLog"
-echo "Directory being backed up: $source/ " >> "$tmpLog"
-echo "" >> "$tmpLog"
-echo "Archive location: $dest/$arname" >> "$tmpLog"
-echo "" >> "$tmpLog"
-echo "File system status: " >> "$tmpLog"
-df -h "$source" "$dest" >> "$tmpLog"
-echo "" >> "$tmpLog"
-echo "" >> "$tmpLog"
-
-
-
-
-
-#Creates archive
-echo "Starting $name backup at $(date +%m/%d/%Y) at $(date +%H:%M:%S), check attached fleLog.rtf for details." >> "$tmpLog"
-logger "$(date +%m/%d/%Y) at $(date +%H:%M:%S) - $name backup has begun creating it's archive"
-
-#Checks if there is a exclusion
-if [ "$exclude" = "none" ]
-then
-	tar -cvzf "$dest/$arname" "$source/" >> "$fleLst" 2>&1
-else
-	tar -cvzf "$dest/$arname" "$source/" --exclude="$exclude" >> "$fleLst" 2>&1	
-fi
-
-#Sends an email if the tar command encontered a fatal error
-if [ $? -ne 0 ]
-then
-	echo "" >> "$tmpLog"
-	echo "WARNING: Tar exited with non-zero status, backup failed" >> "$tmpLog"
-	( echo "WARNING: $name Backup failed on $(hostname -s) on $(date +%m/%d/%Y) at $(date +%H:%M:%S), please check the information below and the attached files for more details: "; echo ""; echo ""; cat "$tmpLog" ) | mail -s "$(hostname): $name backup failed" -A "$tmpLog" -A "$fleLst" $email
-	logger "$(date +%m/%d/%Y) at $(date +%H:%M:%S) - $name backup failed (tar exited with non-zero status)."
-	exit 3
-fi
-
-logger "$(date +%m/%d/%Y) at $(date +%H:%M:%S) - $name archive at has been created."
-
-
-
-
-
-#Post-Backup checks
-
-#Checks if archive is accessable
-touch "$dest/$arname"
-
-if [ $? -eq 0 ]
-then
-	echo "Archive can be touched, backup success." >> "$tmpLog"
-fi
-
-
-
-#Changes the archive permissions
-echo "" >> "$tmpLog"
-echo "Changing the file permissions of the backup archive..." >> "$tmpLog"
-chmod -v 777 "$dest/$arname" >> "/dev/null" 2>&1
-
-#Checks if the changing permissions was successful 
-if [ $? -eq 0 ] 
-then	
-	echo "Permissions command completed successfully, desireable permissions should be set now:" >> "$tmpLog"
-	ls -lh "$dest/$arname" >> "$tmpLog"
-	
-else
-	echo "WARNING: chmod returned non-zero status, archive may have undesirable permissions." >> "$tmpLog"
-fi
-
-
-
-
-#Purges all but the last number of specified backups, displays output in easy to read form.
-echo "" >> "$tmpLog"
-echo "" >> "$tmpLog"
-echo "" >> "$tmpLog"
-echo "Destination directory before purge: " >> "$tmpLog"
-cd "$dest/" >> "$tmpLog"
-ls -h >> "$tmpLog"
-logger "$(date +%m/%d/%Y) at $(date +%H:%M:%S) - purging all $name backups but the last $bkupLimt"
-ls -tQ | tail -n+$((1+$bkupLimt)) | xargs rm
-
-# Checks if the purge completed
-if [ $? -eq 0 ]
-then
-	echo "" >> "$tmpLog"
-	echo "Purge completed successfully" >> "$tmpLog"
-	echo "" >> "$tmpLog"
-	echo "Destination directory after purge (keep last $bkupLimt backups): " >> "$tmpLog"
-	ls -h >> "$tmpLog"
-else
-	if [ "$(ls | wc -l)" -le $bkupLimt ]		# less then the specified number of backups (sutch as if this is the first backup).
-	then
-		echo "" >> "$tmpLog"
-		echo "Purge is not nessesary as there are $bkupLimt or less backups in the backup location" >> "$tmpLog"
-		echo "" >> "$tmpLog"
-		echo "Current destination directory: " >> "$tmpLog"
-		ls -lh >> "$tmpLog"
-	else					# If failure is due to something else
-		echo "" >> "$tmpLog"
-		echo "WARNIING: Purge failed (unknown reason)" >> "$tmpLog"
-		echo "" >> "$tmpLog"
-		echo "Destination directory after failed purge: " >> "$tmpLog"
-		ls -lh >> "$tmpLog" 
+# Send email to administrator routine.
+email() {
+if [ "$SENDEMAIL" == "yes" ]; then	
+	if [ "$1" == "success" ]; then
+		echo "Backup completed successfuly on machine: $(hostname) in: ${DURATION} seconds." | mail -s "${SUCCESSFULEMAILSUBJECT}" "${TOEMAILADDRESS}"
+		log "Backup success email sent to "${TOEMAILADDRESS}"."
+	else	# If backup failed
+		echo "Backup failed on machine: $(hostname) for the beacause: ${1}" | mail -s "${FAILUREEMAILSUBJECT}" "${TOEMAILADDRESS}"
+		log "Backup failure email sent to "${TOEMAILADDRESS}"."
 	fi
+else # SENDEMAIL is false
+	log "Email will not be sent (SENDEMAIL is set to false)"
+fi
+}
+
+
+log "Backup script has started."
+logger "The backup script has started"
+
+
+# Defaults WOL command to etherwake.
+log "Machine will default to using etherwake for WOL."; log ""
+WOL="etherwake"
+
+
+
+#########################
+### Pre-flight Checks ###
+#########################
+
+# This section checks for all of the binaries used in the backup.
+log "Starting binary check..."
+BINARIES=( cat cd command date dirname echo find openssl pwd readlink rsync ssh tar sync etherwake mail logger)
+
+# Iterate over the list of binaries, and if one isn't found, abort.
+for BINARY in "${BINARIES[@]}"; do
+    if [ ! "$(command -v "$BINARY")" ]; then
+        log "Binary $BINARY not found, evaluating..."
+		
+		# Different versions of etherwake use a different name in order to run.
+		if [ "$BINARY" == "etherwake" ]; then
+			log "Binary appears to be etherwake"
+			log "Checking if command ether-wake works... "
+			
+			# Sets the WOL value to "ether-wake if that is the appropreate command for the system".
+			if [ "$(command -v "ether-wake")" ]; then
+				WOL="ether-wake"
+				log "ether-wake command exists, script will use that for WOL instead"
+				# Continues on to check the next binary...
+			
+			# If the etherwake nor ether-wake works (neither package is installed).
+			else
+				log "ether-wake command does not exist."
+				log "Neither ether-wake nor etherwake is installed. please install this package and try again."
+				email "nither ether-wake nor etherwake is installed"
+				logger "the backup script failed (neither ether-wake nor etherwake is installed this system)"
+				exit
+			fi
+			
+		else
+			# Normal output if package is not installed.
+			log "$BINARY is not installed. Install it and try again"
+			email "$BINARY is not installed"
+			logger "the backup script failed ($BINARY is not installed)"
+			exit
+		fi
+    fi
+done
+
+log "Binary check complete, all required programs are installed."; log ""
+
+# Wake up backup server (3 times beacause I don't trust WOL).
+log "Waking up backup server..."
+$($WOL -i eth0 $REMOTEMAC)
+$($WOL -i eth0 $REMOTEMAC)
+$($WOL -i eth0 $REMOTEMAC)
+log "3 WOL packets sent to remote server, script will wait for the server to come up..."; log ""
+
+# Give the server some time to boot.
+sleep 5		#DEBUGGING: change back to 120 (or when not using calling script.)
+log "Remote server should be up by now, trying to login to it over SSH..."
+
+# Tries to login over SSH, logs and stops if the login fails.
+if [ ! "$(ssh -oBatchMode=yes -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" echo test)" ]; then
+    log "Failed to login to ${REMOTEUSER}@${REMOTESERVER}"
+    log "Make sure that your public key is in their authorized_keys"
+    email "SSH login failed"
+    logger "the backup script failed (SSH login to remote server failed)"
+    exit
 fi
 
+log "SSH login successful, remote server now up."
 
+####################
+### MYSQL BACKUP ###
+####################
+# If the MySQLDump command doesn't exist or user doesn't want to backup MySQL.
+if [ ! command -v mysqldump ] || [ "$MYSQLUSERNAME" == "" ]; then
+    log "MySQLDump command not found, or user has indicated that they do NOT want to backup MySQL."
+	log "Script will continue but MySQL databases will NOT be backed up."
 
-
-
-#Lists information about this archive and other archives in the destination file system.
-echo "" >> "$tmpLog"
-echo "" >> "$tmpLog"
-echo "File size of current backup archive: ">> "$tmpLog" 
-du -shc "$dest/$arname" | tail -n 1 >> "$tmpLog"
-echo "" >> "$tmpLog"
-echo "Total of all file archives of this type: " >> "$tmpLog"
-du -shc "$dest" | tail -n 1 >> "$tmpLog"
-
-#Lists information about the file system (after backup).
-echo "" >> "$tmpLog"
-echo "" >> "$tmpLog"
-echo "File system status: " >> "$tmpLog"
-df -h "$source" "$dest" >> "$tmpLog"
-
-#Creates "footer" for log file.
-echo "" >> "$tmpLog"
-echo "Finished at: $(date +%H:%M:%S) on $(date +%m/%d/%Y)" >> "$tmpLog" 
-echo "Size of backup archive: $(du -shc "$dest/$arname" | tail -n 1)" >> "$tmpLog"
-echo "Total size of all backups: $(du -shc "$dest/$arname" | tail -n 1)" >> "$tmpLog"
-echo "" >> "$tmpLog" 
-echo "--- This is the end of the log file ---" >> "$tmpLog"
-
-
-
-
-
-#Sends email with temporary log file file list attached.
-( echo "$name backup on $(hostname -s) has completed on $(date +%m/%d/%Y) at $(date +%H:%M:%S), please check the information below and the attached files for more details: "; echo ""; echo ""; cat "$tmpLog" ) | mail -s "$(hostname): $name backup complete" -A "$tmpLog" -A "$fleLst" $email
-
-if [ $? -eq 0 ]
-then
-	echo "$(date) - Email to $email sent successfully" >> $tmpLog
+# If user does want MySQL backup, do so.
 else
-	echo "$(date) - There was a problem sending an email to $email, email not sent" >> $tmpLog
+	###############
+	## MySQLDump ##
+	###############
+	log "Executing MySQLDump..."
+	logger "Backup script is executing MySQLDump..."
+	mkdir "${TEMPDIR}" 2>/dev/null
+	$(mysqldump -u ${MYSQLUSERNAME} -p${MYSQLPASSWORD} --all-databases --add-locks > "${TMPSQLDUMP}")
+	BACKUP+=("${TMPSQLDUMP}")
+	sync
+	logger "MySQLDump complete!"
+	log "MySQLDump Complete!"	
+fi 
+
+log ""
+
+##################################
+### Prepares the rsync Command ###
+##################################
+# Default rsync command (Partal, the last part of the command is appended after the exclusions are added )
+log "Creating rsync command..."
+RSYNCCMD="rsync -aqz --relative "
+
+# Specifies any exclsions that are specified in the rsync command
+if [ "${EXCLUDE[@]}" != "" ]; then
+	log "Config file specifies files to be excluded, these will be removed from the backup."
+	# Add exclusions to front of command
+	for i in "${EXCLUDE[@]}"; do
+		echo " --exclude $i" >> "${RSYNCCMD}"
+	done
+# Logs if there are no exclusions.
+else
+	log "No exclusions where specified in the config, all files in the source directory(s) will be backed up."
+fi
+
+RSYNCCMD=""${RSYNCCMD}""${BACKUP[*]}" -e ssh -p ${REMOTEPORT} ${REMOTEUSER}@${REMOTESERVER}:"${DESTINATION}""
+log ""
+
+
+###############################################
+####### Creating the destination folder #######
+###############################################
+# Creates folder on remote server to contain the backup.
+log "Creating folder with current date and time on remote server..."
+if ! ssh -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" mkdir "${DESTINATION}" ; then
+	# Logs if this action failed.
+	log "Failed to create ${REMOTEDIR} on ${REMOTESERVER}"
+	log "Backup cannot continue, admin will be emailed and script will stop..."; log ""
+	email "remote directory could not be created to hold the uncompressed backup"
+	logger "the backup script failed (remote directory could not be created to hold the uncompressed backup)"
+	exit
+fi
+
+# Varifies that backup directory has been created.
+log "Remote directory appears to have been created at ${REMOTEDIR} varifying that the folder exists..." 
+sleep 0.25
+# If the backup directory was NOT created, script logs the error and exits.
+if ! ssh -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" test -d "${REMOTEDIR}" ; then
+	log "${REMOTEDIR} was not created"
+	log "Backup cannot continue, notifying admin and stopping script..."; log ""
+	email "remote directory could not be created to hold the backup"
+	logger "the backup script failed (remote directory could not be created)"
+	exit
+fi
+
+log "Backup directory for backup has been created on remote server."
+
+
+# Flushes the HDD of the local and remote server before begining rsync.
+log "Begining rsync to remote server..."
+logger "the backup script will now begin to rsync files over to the remote server"
+sync
+sleep 0.5 
+
+###########################
+### Running the Backup ####
+###########################
+# Run rsync, stops the script if the command fails.
+if $RSYNCCMD 2>/dev/null ; then 
+	log "rsync failed!"
+	log "Script cannot continue, an email will be sent to admin and script will exit"
+	logger "rsync command to remote server failed, the backup has failed, and the backup script will exit"
+	email "rsync command failed, this is a fatal error the backup has failed and cannot continue"
+	exit
+fi
+
+# Flushes HDD on local and remote machine.
+sync
+ssh -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" sync 
+sleep 1
+
+# Checks if rsync transfered ANY files over to the remote server.
+log "rsync completed successfully, checking if remote directory contains any files..."
+logger "the backup script has finished rsyncing the files over to the remote server."
+
+if ssh -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" test -e "${DESTINATION}${BACKUP[1]}" ; then
+	log "Success! rsync has transfered at least one file to the remote server"
+	else
+	log "rsync command completed successfully, but it did NOT copy any files to the remote server."
+	log "This is a fatal error and the script must exit"
+	logger "rsync command executed successfully, but failed to copy any files to the remote server, (this is a fatal error and script will now exit)"
+	email "rsync command executed successfully, but failed to copy any files to the remote server, (this is a fatal error and the script will now exit)"
+	exit
+fi
+
+log ""
+
+
+#TODO: Verify checksums of backed up files.
+
+
+
+
+############################
+### Deleting old backups ###
+############################
+
+# Deletes the old MySQLDump file.
+if [ -e "${TMPSQLDUMP}" ]; then
+	log "Securely deleting old MySQLDump file (this may take awhile)..."
+	shred -fuzn 5 "${TMPSQLDUMP}"
+	log "Temporary MySQLDump has been securely deleted."
+else
+	log "Temporary MySQLDump file does not exist, deletion is not nessessary."
+fi
+
+log ""
+
+# Delete all but last X number of backups.
+#TODO: make the number of backups to hold customizable in the config (also change the logging and emails use the specified number of backups).
+log "Attempting to delete all but the last 5 backups..."
+if ! ssh -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" "ls -tr | head -n -5 | xargs rm -r" ; then
+	log "Failed to delete all but the last 5 backups, backup script will continue, however you may have to delete these manuallly."
+	email "backup script completed, however it was unable to delete the last 5 backups. This may occor if there are less then 5 backups being stored."
+# Logs if the old backups where able to be deleted.
+else
+	log "All but last 5 backups have been securely deleted."
+fi
+
+# Flushes HDD buffers on local and remote server.
+sync
+ssh -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" sync
+sleep 0.25
+log ""
+
+##########################
+### Encryptiing Backup ###
+##########################
+# Makes an archive if user wants an archive or encryption (or has specified that they want bolth).
+if [ $CREATEARCHIVE == "yes" ] || [ $BACKUPPASS != "" ]; then
+	log "User wants compression/encryption, compressing backup on remote server..."
+	# Runs tar command on remote server uses the pigz program to compress using multiple cores.
+	ssh -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" "tar -zc --use-compress-program=pigz -f ${REMOTEDIR}.tgz ${DESTINATION}"
+	# Securely deletes uncompressed backup on remote server.
+	log "Compression complete. Securely deleting uncompressed backup..."
+	ssh -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" "shred -fuzn 5 ${DESTINATION}"
+	log "Secure deletion complete."
+	log ""
+fi
+
+# Encrypts the archive on the remote server 
+if [ $BACKUPPASS != "" ]; then
+	log "User wants archive to be encrypted, applying encryption to archive on remote server..."
+	"openssl enc -aes256 -in ${DESTINATION}.tgz -out ${DESTINATION}.enc -pass pass:${BACKUPPASS} -md sha1"
+	# Securely deletes unencrypted archive on remote server.
+	log "Encryption complete. Securely deleting unencrypted archive..."
+	ssh -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" "shred -fuzn 5 ${DESTINATION}.enc"	
+	log "Secure deletion complete."
+	log ""
 fi
 
 
-
-
-#Dumps the temp log into the full log before deleting the temp log and file list.
-cat "$tmpLog" >> "$fulLog"
-rm "$tmpLog" "$fleLst" >> /dev/null 2>&1
-logger "$(date +%m/%d/%Y) at $(date +%H:%M:%S) - $name backup has completed."
-exit 0
+##################################
+### Emailing Admin and Exiting ###
+##################################
+# Flushes HDD buffers on local and remote server one last time.
+sync
+ssh -p "${REMOTEPORT}" "${REMOTEUSER}"@"${REMOTESERVER}" sync
+sleep 0.25
+# Gets the time that backup completed and figures out how long it took before sending email to admin.
+ENDTIME=$(date +%s)
+DURATION=$((ENDTIME - STARTTIME))
+log "Backup completed in ${DURATION} seconds."
+email "success"	
+logger "the backup script has completed the backup successfuly and completed all post-backup tasks"
+log "Backup complete, admin notified of completion and backup will now exit."
+# Adds several lines to the bottom of the log file in order to reduce confusion.
+log ""
+log ""
+log ""
+exit
