@@ -141,7 +141,7 @@ $($WOL -i eth0 $REMOTEMAC)
 log "3 WOL packets sent to remote server, script will wait for the server to come up..."; log ""
 
 # Give the server some time to boot.
-sleep 5		#DEBUGGING: change back to 120 (or when not using calling script.)
+sleep 120
 log "Remote server should be up by now, trying to login to it over SSH..."
 
 # Tries to login over SSH, logs and stops if the login fails.
